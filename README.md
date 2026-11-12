@@ -167,4 +167,17 @@ python3 host.py UART_PORT uart-loopback
 
 交 `src/wiring.rs`、引脚表和实测记录。引脚表写清 SWCLK、SWDIO、UART TX 和 RX 的 MCU 引脚与接插件脚号。记录测试命令、结果和未测项目，并说明一项你用实测确认的配置。
 
-选做可用现成的 Classical CAN 与第二个节点交换帧，或继续尝试 CAN FD 和 Linux SocketCAN。
+### 选做：CAN FD
+
+CAN1 使用 PD0（RX）和 PD1（TX），由板载 CAN 收发器接入 CAN 总线；无需新增 GPIO 引脚配置。固件保持 1 Mbit/s 仲裁位率，启用 2 Mbit/s 数据位率与 BRS。此时序只完成软件构建验证，实际使用前须与 CAN FD 对端确认时序、收发器能力和布线。
+
+控制串口提供固定 12 字节的 CAN FD 测试命令：
+
+```sh
+python3 host.py CONTROL_PORT canfd-send 123 00112233445566778899AABB
+python3 host.py CONTROL_PORT canfd-recv
+```
+
+`canfd-send` 发送带 BRS 的 FD 标准帧，`canfd-recv` 接收 FD 帧。与 Classical CAN 命令不同，CAN FD 收发必须使用支持 CAN FD 的对端；仅编译通过不代表已经完成总线实测。
+
+Classical CAN 仍可通过现有 `can-send` / `can-recv` 命令使用。Linux SocketCAN 是独立扩展，不由 CAN FD 配置自动提供。

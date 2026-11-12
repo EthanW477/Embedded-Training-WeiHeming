@@ -4,7 +4,7 @@ use embassy_stm32::{
     Config, Peri, Peripherals, bind_interrupts,
     can::{
         Can, CanConfigurator, IT0InterruptHandler, IT1InterruptHandler,
-        config::{FrameTransmissionConfig, NominalBitTiming},
+        config::{DataBitTiming, FrameTransmissionConfig, NominalBitTiming},
     },
     peripherals,
     rcc::{
@@ -75,10 +75,19 @@ pub fn can1(
         seg2: NonZeroU8::new(20).unwrap(),
         sync_jump_width: NonZeroU8::new(20).unwrap(),
     };
+    // Keep arbitration at 1 Mbit/s. CAN FD data uses 2 Mbit/s with BRS.
+    let data_timing = DataBitTiming {
+        transceiver_delay_compensation: false,
+        prescaler: NonZeroU16::new(1).unwrap(),
+        seg1: NonZeroU8::new(31).unwrap(),
+        seg2: NonZeroU8::new(8).unwrap(),
+        sync_jump_width: NonZeroU8::new(7).unwrap(),
+    };
     let config = can
         .config()
         .set_nominal_bit_timing(timing)
-        .set_frame_transmit(FrameTransmissionConfig::ClassicCanOnly);
+        .set_data_bit_timing(data_timing)
+        .set_frame_transmit(FrameTransmissionConfig::AllowFdCanAndBRS);
     can.set_config(config);
     can.into_normal_mode()
 }

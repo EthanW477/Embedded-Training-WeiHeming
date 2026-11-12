@@ -1,5 +1,8 @@
 use core::fmt::Write;
-use embassy_stm32::can::{Can, Frame};
+use embassy_stm32::can::{
+    Can, Frame,
+    frame::{FdFrame, Header},
+};
 use embassy_time::{Duration, with_timeout};
 use embedded_can::{Frame as _, Id};
 use heapless::String;
@@ -90,9 +93,64 @@ pub async fn execute(command: &str, can: &mut Can<'_>, swd: &mut Option<Swd>) ->
             }
             out.push('\n').expect("line ending fits");
         }
+        (Some("CANFD"), Some("TX")) => {
+            let (Some(id), Some(hex), None) = (words.next(), words.next(), words.next()) else {
+                return fixed("ERR SYNTAX\n");
+            };
+            let Some(frame) = parse_fd_frame(id, hex) else {
+                return fixed("ERR FRAME\n");
+            };
+            return match with_timeout(Duration::from_millis(100), can.write_fd(&frame)).await {
+                Ok(None) => fixed("OK QUEUED\n"),
+                _ => fixed("ERR CANFD TX\n"),
+            };
+        }
+        (Some("CANFD"), Some("RX")) if words.next().is_none() => {
+            let envelope = match with_timeout(Duration::from_millis(100), can.read_fd()).await {
+                Ok(Ok(frame)) => frame,
+                Ok(Err(_)) => return fixed("ERR CANFD RX\n"),
+                Err(_) => return fixed("EMPTY\n"),
+            };
+            let frame = envelope.frame;
+            let Id::Standard(id) = *frame.id() else {
+                return fixed("ERR UNSUPPORTED_FRAME\n");
+            };
+            if !frame.header().fdcan() || frame.is_remote_frame() || frame.data().len() > 12 {
+                return fixed("ERR UNSUPPORTED_FRAME\n");
+            }
+            write!(out, "OK FD RX {:03X} ", id.as_raw()).expect("CAN FD prefix fits");
+            for byte in frame.data() {
+                write!(out, "{byte:02X}").expect("12-byte CAN FD reply fits");
+            }
+            writeln!(
+                out,
+                " BRS={}",
+                u8::from(frame.header().bit_rate_switching())
+            )
+            .expect("CAN FD reply fits");
+        }
         _ => return fixed("ERR SYNTAX\n"),
     }
     out
+}
+
+fn parse_fd_frame(id: &str, payload: &str) -> Option<FdFrame> {
+    let id = u16::from_str_radix(id, 16).ok()?;
+    let standard_id = embedded_can::StandardId::new(id)?;
+    if payload.len() != 24 || !payload.is_ascii() {
+        return None;
+    }
+
+    let mut bytes = [0; 12];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&payload[i * 2..i * 2 + 2], 16).ok()?;
+    }
+
+    FdFrame::new(
+        Header::new_fd(Id::Standard(standard_id), bytes.len() as u8, false, true),
+        &bytes,
+    )
+    .ok()
 }
 
 fn parse_frame(id: &str, payload: &str) -> Option<Frame> {
