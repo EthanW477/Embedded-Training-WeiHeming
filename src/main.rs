@@ -74,9 +74,10 @@ async fn control_port(
             for &byte in &packet[..n] {
                 if let Some(command) = line.push(byte) {
                     let reply = protocol::execute(command, &mut can, &mut swd).await;
-                    // Responses are bounded below 64 B, so USB needs no extra ZLP.
-                    if usb.write_packet(reply.as_bytes()).await.is_err() {
-                        break 'connection;
+                    for chunk in reply.as_bytes().chunks(PACKET - 1) {
+                        if usb.write_packet(chunk).await.is_err() {
+                            break 'connection;
+                        }
                     }
                 }
             }

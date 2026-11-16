@@ -9,17 +9,17 @@ use heapless::String;
 
 use crate::swd::Swd;
 
-type Reply = String<63>;
+type Reply = String<256>;
 
 pub struct Line {
-    bytes: [u8; 96],
+    bytes: [u8; 160],
     len: usize,
 }
 
 impl Line {
     pub const fn new() -> Self {
         Self {
-            bytes: [0; 96],
+            bytes: [0; 160],
             len: 0,
         }
     }
@@ -42,7 +42,7 @@ impl Line {
 }
 
 fn fixed(text: &str) -> Reply {
-    Reply::try_from(text).expect("fixed reply fits one short USB packet")
+    Reply::try_from(text).expect("fixed reply fits")
 }
 
 pub async fn execute(command: &str, can: &mut Can<'_>, swd: &mut Option<Swd>) -> Reply {
@@ -115,19 +115,24 @@ pub async fn execute(command: &str, can: &mut Can<'_>, swd: &mut Option<Swd>) ->
             let Id::Standard(id) = *frame.id() else {
                 return fixed("ERR UNSUPPORTED_FRAME\n");
             };
-            if !frame.header().fdcan() || frame.is_remote_frame() || frame.data().len() > 12 {
+            if !frame.header().fdcan() || frame.is_remote_frame() {
                 return fixed("ERR UNSUPPORTED_FRAME\n");
-            }
-            write!(out, "OK FD RX {:03X} ", id.as_raw()).expect("CAN FD prefix fits");
-            for byte in frame.data() {
-                write!(out, "{byte:02X}").expect("12-byte CAN FD reply fits");
             }
             writeln!(
                 out,
-                " BRS={}",
+                "OK FD RX {:03X} {} {}",
+                id.as_raw(),
+                frame.data().len(),
                 u8::from(frame.header().bit_rate_switching())
             )
-            .expect("CAN FD reply fits");
+            .expect("CAN FD header fits");
+            for (offset, chunk) in frame.data().chunks(24).enumerate() {
+                write!(out, "DATA {:02X} ", offset * 24).expect("CAN FD data prefix fits");
+                for byte in chunk {
+                    write!(out, "{byte:02X}").expect("CAN FD data chunk fits");
+                }
+                out.push('\n').expect("CAN FD line ending fits");
+            }
         }
         _ => return fixed("ERR SYNTAX\n"),
     }
@@ -137,18 +142,19 @@ pub async fn execute(command: &str, can: &mut Can<'_>, swd: &mut Option<Swd>) ->
 fn parse_fd_frame(id: &str, payload: &str) -> Option<FdFrame> {
     let id = u16::from_str_radix(id, 16).ok()?;
     let standard_id = embedded_can::StandardId::new(id)?;
-    if payload.len() != 24 || !payload.is_ascii() {
+    let len = payload.len() / 2;
+    if !matches!(len, 12 | 32 | 64) || payload.len() != len * 2 || !payload.is_ascii() {
         return None;
     }
 
-    let mut bytes = [0; 12];
-    for (i, byte) in bytes.iter_mut().enumerate() {
+    let mut bytes = [0; 64];
+    for (i, byte) in bytes[..len].iter_mut().enumerate() {
         *byte = u8::from_str_radix(&payload[i * 2..i * 2 + 2], 16).ok()?;
     }
 
     FdFrame::new(
-        Header::new_fd(Id::Standard(standard_id), bytes.len() as u8, false, true),
-        &bytes,
+        Header::new_fd(Id::Standard(standard_id), len as u8, false, true),
+        &bytes[..len],
     )
     .ok()
 }

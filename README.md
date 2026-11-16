@@ -167,17 +167,19 @@ python3 host.py UART_PORT uart-loopback
 
 交 `src/wiring.rs`、引脚表和实测记录。引脚表写清 SWCLK、SWDIO、UART TX 和 RX 的 MCU 引脚与接插件脚号。记录测试命令、结果和未测项目，并说明一项你用实测确认的配置。
 
-### 选做：CAN FD
+### 扩展任务（三选一）：CAN FD 5 Mbit/s + TDC
 
-CAN1 使用 PD0（RX）和 PD1（TX），由板载 CAN 收发器接入 CAN 总线；无需新增 GPIO 引脚配置。固件保持 1 Mbit/s 仲裁位率，启用 2 Mbit/s 数据位率与 BRS。此时序只完成软件构建验证，实际使用前须与 CAN FD 对端确认时序、收发器能力和布线。
+扩展验收的三个方向任选其一。本工程按第二项实现 CAN FD：CAN1 使用 PD0（RX）和 PD1（TX）以及板载收发器，不需要新增 GPIO 配置；仲裁段为 1 Mbit/s，数据段为 5 Mbit/s，并启用 BRS 和 TDC。数据段时序为 80 MHz 内核时钟、16 tq/bit（prescaler=1、TSEG1=11、TSEG2=4、SJW=2），采样点 75%。TDC 使用 TDCO=13 mtq、TDCF=0；`src/board.rs` 通过 STM32 PAC 设置 TDC，因为当前 Embassy HAL 版本没有把其配置字段写入寄存器。
 
-控制串口提供固定 12 字节的 CAN FD 测试命令：
+控制串口可发送 12、32 或 64 字节 CAN FD 标准帧：
 
 ```sh
 python3 host.py CONTROL_PORT canfd-send 123 00112233445566778899AABB
+python3 host.py CONTROL_PORT canfd-send 123 <64个十六进制字符>
+python3 host.py CONTROL_PORT canfd-send 123 <128个十六进制字符>
 python3 host.py CONTROL_PORT canfd-recv
 ```
 
-`canfd-send` 发送带 BRS 的 FD 标准帧，`canfd-recv` 接收 FD 帧。与 Classical CAN 命令不同，CAN FD 收发必须使用支持 CAN FD 的对端；仅编译通过不代表已经完成总线实测。
+长帧接收由固件分段输出、`host.py` 按长度重组。实际使用需 CAN FD 对端匹配 1 Mbit/s 仲裁位率、5 Mbit/s 数据位率、BRS 和布线。当前验证目标是代码编译；未上板实测，不能据此认定总线通信已通过。详细时序与命令格式见 [`CAN_FD_README.md`](CAN_FD_README.md)。
 
 Classical CAN 仍可通过现有 `can-send` / `can-recv` 命令使用。Linux SocketCAN 是独立扩展，不由 CAN FD 配置自动提供。

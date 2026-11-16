@@ -75,13 +75,14 @@ pub fn can1(
         seg2: NonZeroU8::new(20).unwrap(),
         sync_jump_width: NonZeroU8::new(20).unwrap(),
     };
-    // Keep arbitration at 1 Mbit/s. CAN FD data uses 2 Mbit/s with BRS.
+    // Keep arbitration at 1 Mbit/s. CAN FD data uses 5 Mbit/s with BRS.
     let data_timing = DataBitTiming {
-        transceiver_delay_compensation: false,
+        transceiver_delay_compensation: true,
         prescaler: NonZeroU16::new(1).unwrap(),
-        seg1: NonZeroU8::new(31).unwrap(),
-        seg2: NonZeroU8::new(8).unwrap(),
-        sync_jump_width: NonZeroU8::new(7).unwrap(),
+        // 16 tq per bit at 80 MHz = 5 Mbit/s; sample point is 75%.
+        seg1: NonZeroU8::new(11).unwrap(),
+        seg2: NonZeroU8::new(4).unwrap(),
+        sync_jump_width: NonZeroU8::new(2).unwrap(),
     };
     let config = can
         .config()
@@ -89,5 +90,26 @@ pub fn can1(
         .set_data_bit_timing(data_timing)
         .set_frame_transmit(FrameTransmissionConfig::AllowFdCanAndBRS);
     can.set_config(config);
-    can.into_normal_mode()
+    let can = can.into_normal_mode();
+    configure_transceiver_delay_compensation();
+    can
+}
+
+fn configure_transceiver_delay_compensation() {
+    // embassy-stm32 0.6 exposes the TDC setting but does not apply it to DBTP/TDCR.
+    let regs = embassy_stm32::pac::FDCAN1;
+    regs.cccr().modify(|w| w.set_init(true));
+    while !regs.cccr().read().init() {}
+    regs.cccr().modify(|w| w.set_cce(true));
+
+    regs.dbtp().modify(|w| w.set_tdc(true));
+    regs.tdcr().write(|w| {
+        w.set_tdcf(0);
+        // 13 FDCAN clock cycles = 162.5 ns at the 80 MHz kernel clock.
+        w.set_tdco(13);
+    });
+
+    regs.cccr().modify(|w| w.set_cce(false));
+    regs.cccr().modify(|w| w.set_init(false));
+    while regs.cccr().read().init() {}
 }

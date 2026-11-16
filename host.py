@@ -15,7 +15,7 @@ def main():
     send.add_argument("data", help="0–8 bytes in hex, or '-' for no data")
     fd_send = commands.add_parser("canfd-send")
     fd_send.add_argument("id", help="11-bit hex ID, without 0x")
-    fd_send.add_argument("data", help="exactly 12 bytes in hex")
+    fd_send.add_argument("data", help="12, 32, or 64 bytes in hex")
     args = parser.parse_args()
 
     try:
@@ -28,8 +28,8 @@ def main():
             payload = bytes.fromhex(args.data)
         except ValueError:
             parser.error("CAN FD payload must contain hexadecimal bytes")
-        if len(payload) != 12:
-            parser.error("CAN FD payload must be exactly 12 bytes (24 hex characters)")
+        if len(payload) not in (12, 32, 64):
+            parser.error("CAN FD payload must be 12, 32, or 64 bytes")
         fd_payload = payload.hex().upper()
 
     try:
@@ -52,9 +52,40 @@ def main():
             else:
                 command = {"ping": "PING", "swd": "SWD ID", "can-recv": "CAN RX"}[args.command]
             port.write((command + "\n").encode("ascii"))
-            reply = port.readline(96).decode("ascii", errors="replace").strip()
+            reply = port.readline(256).decode("ascii", errors="replace").strip()
             if not reply:
                 parser.exit(1, "No response. Check that this is the control interface.\n")
+            if args.command == "canfd-recv" and reply.startswith("OK FD RX "):
+                fields = reply.split()
+                if len(fields) != 6:
+                    parser.exit(1, f"Malformed CAN FD response header: {reply}\n")
+                _, _, _, frame_id, length_text, brs_text = fields
+                try:
+                    expected_length = int(length_text)
+                except ValueError:
+                    parser.exit(1, f"Invalid CAN FD response length: {reply}\n")
+                valid_fd_lengths = set(range(9)) | {12, 16, 20, 24, 32, 48, 64}
+                if expected_length not in valid_fd_lengths or brs_text not in ("0", "1"):
+                    parser.exit(1, f"Invalid CAN FD response metadata: {reply}\n")
+                payload = bytearray()
+                while len(payload) < expected_length:
+                    part = port.readline(64).decode("ascii", errors="replace").strip().split()
+                    if len(part) != 3 or part[0] != "DATA":
+                        parser.exit(1, "Malformed CAN FD data fragment\n")
+                    try:
+                        offset = int(part[1], 16)
+                    except ValueError:
+                        parser.exit(1, "Invalid CAN FD data fragment offset\n")
+                    if offset != len(payload):
+                        parser.exit(1, "Out-of-order CAN FD data fragment\n")
+                    try:
+                        chunk = bytes.fromhex(part[2])
+                    except ValueError:
+                        parser.exit(1, "Non-hexadecimal CAN FD data fragment\n")
+                    if not chunk or len(payload) + len(chunk) > expected_length:
+                        parser.exit(1, "Invalid CAN FD data fragment length\n")
+                    payload.extend(chunk)
+                reply = f"OK FD RX {frame_id} {payload.hex().upper()} BRS={brs_text}"
             print(reply)
             if not (reply.startswith("OK ") or reply == "EMPTY"):
                 parser.exit(1)
